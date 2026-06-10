@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="el" class="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bot Monitor — EMA 9/21 Futures</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Exo+2:wght@300;400;500;600;700&family=Orbitron:wght@500;600;700&display=swap" rel="stylesheet">
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      colors: {
+        base:   '#0F172A',
+        panel:  '#16213B',
+        edge:   '#27345A',
+        primary:'#F59E0B',
+        accent: '#8B5CF6',
+        up:     '#34D399',
+        down:   '#F87171',
+        muted:  '#94A3B8',
+      },
+      fontFamily: {
+        display: ['Orbitron','sans-serif'],
+        body: ['"Exo 2"','sans-serif'],
+      },
+    }
+  }
+}
+</script>
+<style>
+  body { background:#0F172A; }
+  .glow-amber { text-shadow: 0 0 10px rgba(245,158,11,.45); }
+  .glow-up    { text-shadow: 0 0 10px rgba(52,211,153,.4); }
+  .glow-down  { text-shadow: 0 0 10px rgba(248,113,113,.4); }
+  .pulse-dot::before {
+    content:''; position:absolute; inset:0; border-radius:9999px;
+    background:currentColor; opacity:.6; animation:ping 1.8s cubic-bezier(0,0,.2,1) infinite;
+  }
+  @keyframes ping { 75%,100% { transform:scale(2.4); opacity:0; } }
+  @media (prefers-reduced-motion: reduce) {
+    .pulse-dot::before { animation:none; }
+    * { transition-duration:0ms !important; }
+  }
+  .logfeed::-webkit-scrollbar { width:8px; }
+  .logfeed::-webkit-scrollbar-thumb { background:#27345A; border-radius:4px; }
+  :focus-visible { outline:2px solid #F59E0B; outline-offset:2px; border-radius:4px; }
+</style>
+</head>
+<body class="font-body text-slate-100 min-h-screen antialiased">
+
+<!-- Header -->
+<header class="sticky top-4 z-50 mx-4 lg:mx-8">
+  <div class="max-w-7xl mx-auto flex items-center justify-between gap-4 rounded-2xl border border-edge bg-panel/80 backdrop-blur px-5 py-3">
+    <div class="flex items-center gap-3 min-w-0">
+      <svg class="w-7 h-7 text-primary shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/>
+      </svg>
+      <div class="min-w-0">
+        <h1 class="font-display text-base sm:text-lg tracking-wider glow-amber truncate">BOT MONITOR</h1>
+        <p class="text-xs text-muted truncate">EMA 9/21 Crossover · Binance Futures Testnet</p>
+      </div>
+    </div>
+    <div class="flex items-center gap-3 sm:gap-5 shrink-0">
+      <div class="hidden sm:block text-right">
+        <p class="text-[11px] uppercase tracking-widest text-muted">Τελευταία ενημέρωση</p>
+        <p id="lastUpdate" class="text-sm font-medium tabular-nums">—</p>
+      </div>
+      <span id="statusPill" class="inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold uppercase tracking-wider border-edge text-muted">
+        <span class="relative inline-flex w-2 h-2 rounded-full bg-current pulse-dot" aria-hidden="true"></span>
+        <span id="statusText">Σύνδεση…</span>
+      </span>
+    </div>
+  </div>
+</header>
+
+<main class="max-w-7xl mx-auto px-4 lg:px-8 pt-8 pb-16 space-y-6">
+
+  <!-- Stat cards -->
+  <section aria-label="Σύνοψη" class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+    <div class="rounded-2xl border border-edge bg-panel p-5">
+      <div class="flex items-center gap-2 text-muted text-xs uppercase tracking-widest">
+        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2"/><path d="M6 12h.01M18 12h.01"/></svg>
+        Διαθέσιμο κεφάλαιο
+      </div>
+      <p id="balance" class="mt-2 font-display text-2xl sm:text-3xl text-primary glow-amber tabular-nums">—</p>
+    </div>
+    <div class="rounded-2xl border border-edge bg-panel p-5">
+      <div class="flex items-center gap-2 text-muted text-xs uppercase tracking-widest">
+        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4v16h16"/><path d="m7 14 4-4 3 3 5-6"/></svg>
+        Μη υλοποιημένο PnL
+      </div>
+      <p id="pnl" class="mt-2 font-display text-2xl sm:text-3xl tabular-nums text-slate-100">—</p>
+    </div>
+    <div class="rounded-2xl border border-edge bg-panel p-5">
+      <div class="flex items-center gap-2 text-muted text-xs uppercase tracking-widest">
+        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z"/></svg>
+        Τελευταίο σήμα
+      </div>
+      <p id="lastSignal" class="mt-2 font-display text-2xl sm:text-3xl text-accent tabular-nums">—</p>
+    </div>
+  </section>
+
+  <!-- Position + Equity -->
+  <section class="grid grid-cols-1 lg:grid-cols-5 gap-4" aria-label="Θέση και κεφάλαιο">
+    <div class="lg:col-span-2 rounded-2xl border border-edge bg-panel p-5 flex flex-col">
+      <h2 class="font-display text-sm tracking-widest text-muted uppercase">Ανοιχτή θέση</h2>
+      <div id="positionCard" class="mt-4 flex-1"></div>
+    </div>
+    <div class="lg:col-span-3 rounded-2xl border border-edge bg-panel p-5">
+      <h2 class="font-display text-sm tracking-widest text-muted uppercase">Κεφάλαιο (equity)</h2>
+      <div class="mt-4 h-64"><canvas id="equityChart" role="img" aria-label="Διάγραμμα εξέλιξης κεφαλαίου"></canvas></div>
+    </div>
+  </section>
+
+  <!-- Signals table -->
+  <section class="rounded-2xl border border-edge bg-panel p-5" aria-label="Σήματα ανά σύμβολο">
+    <h2 class="font-display text-sm tracking-widest text-muted uppercase">Σήματα &amp; EMA ανά σύμβολο</h2>
+    <div class="mt-4 overflow-x-auto">
+      <table class="w-full text-sm min-w-[640px]">
+        <thead>
+          <tr class="text-left text-muted text-xs uppercase tracking-widest border-b border-edge">
+            <th scope="col" class="py-2 pr-4 font-medium">Σύμβολο</th>
+            <th scope="col" class="py-2 pr-4 font-medium">Τιμή</th>
+            <th scope="col" class="py-2 pr-4 font-medium">EMA Fast</th>
+            <th scope="col" class="py-2 pr-4 font-medium">EMA Slow</th>
+            <th scope="col" class="py-2 pr-4 font-medium">Τάση</th>
+            <th scope="col" class="py-2 font-medium">Σήμα</th>
+          </tr>
+        </thead>
+        <tbody id="symbolRows"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- Log feed -->
+  <section class="rounded-2xl border border-edge bg-panel p-5" aria-label="Πρόσφατα logs">
+    <div class="flex items-center justify-between">
+      <h2 class="font-display text-sm tracking-widest text-muted uppercase">Πρόσφατα logs</h2>
+      <button id="pauseBtn" type="button"
+        class="cursor-pointer rounded-lg border border-edge px-3 py-1.5 text-xs font-semibold text-muted hover:text-slate-100 hover:border-primary transition-colors duration-200">
+        Παύση ροής
+      </button>
+    </div>
+    <pre id="logFeed" class="logfeed mt-4 h-72 overflow-y-auto rounded-xl bg-base/80 border border-edge p-4 text-xs leading-relaxed text-slate-300 whitespace-pre-wrap break-words"></pre>
+  </section>
+</main>
+
+<script>
+'use strict';
+const fmt = (n, d = 2) => n == null ? '—' :
+  Number(n).toLocaleString('el-GR', { minimumFractionDigits: d, maximumFractionDigits: d });
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+let paused = false;
+document.getElementById('pauseBtn').addEventListener('click', e => {
+  paused = !paused;
+  e.currentTarget.textContent = paused ? 'Συνέχιση ροής' : 'Παύση ροής';
+});
+
+const STATUS_STYLES = {
+  running: { text: 'Σε λειτουργία', cls: 'border-up/40 text-up bg-up/10' },
+  stale:   { text: 'Χωρίς πρόσφατα logs', cls: 'border-primary/40 text-primary bg-primary/10' },
+  offline: { text: 'Εκτός σύνδεσης', cls: 'border-down/40 text-down bg-down/10' },
+};
+
+let chart;
+function renderChart(equity, quote) {
+  const ctx = document.getElementById('equityChart');
+  const labels = equity.map(p => p.t.slice(5, 16));
+  const data = equity.map(p => p.v);
+  if (!chart) {
+    chart = new Chart(ctx, {
+      type: 'line',
+      data: { labels, datasets: [{
+        label: 'Equity', data, borderColor: '#F59E0B', borderWidth: 2,
+        pointRadius: 0, pointHitRadius: 8, tension: .3, fill: true,
+        backgroundColor: c => {
+          const g = c.chart.ctx.createLinearGradient(0, 0, 0, c.chart.height);
+          g.addColorStop(0, 'rgba(245,158,11,.25)'); g.addColorStop(1, 'rgba(245,158,11,0)');
+          return g;
+        },
+      }]},
+      options: {
+        responsive: true, maintainAspectRatio: false, animation: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: '#16213B', borderColor: '#27345A', borderWidth: 1,
+            titleColor: '#94A3B8', bodyColor: '#F8FAFC',
+            callbacks: { label: c => ` ${fmt(c.parsed.y)} ${quote}` },
+          },
+        },
+        scales: {
+          x: { ticks: { color: '#64748B', maxTicksLimit: 8 }, grid: { color: 'rgba(39,52,90,.5)' } },
+          y: { ticks: { color: '#64748B', callback: v => fmt(v, 0) }, grid: { color: 'rgba(39,52,90,.5)' } },
+        },
+      },
+    });
+  } else {
+    chart.data.labels = labels;
+    chart.data.datasets[0].data = data;
+    chart.update('none');
+  }
+}
+
+function renderPosition(p, quote) {
+  const el = document.getElementById('positionCard');
+  if (!p) {
+    el.innerHTML = `
+      <div class="h-full flex flex-col items-center justify-center text-center gap-3 py-6">
+        <svg class="w-10 h-10 text-edge" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M8 12h8"/></svg>
+        <p class="text-muted text-sm">Καμία ανοιχτή θέση — αναμονή σήματος (FLAT)</p>
+      </div>`;
+    return;
+  }
+  const long = p.side === 'LONG';
+  const pnlCls = p.pnl == null ? 'text-slate-100' : p.pnl >= 0 ? 'text-up glow-up' : 'text-down glow-down';
+  el.innerHTML = `
+    <div class="space-y-4">
+      <div class="flex items-center justify-between gap-3">
+        <span class="font-display text-lg tracking-wide">${esc(p.symbol)}</span>
+        <span class="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-bold uppercase tracking-wider
+          ${long ? 'bg-up/15 text-up border border-up/40' : 'bg-down/15 text-down border border-down/40'}">
+          <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            ${long ? '<path d="M12 19V5"/><path d="m5 12 7-7 7 7"/>' : '<path d="M12 5v14"/><path d="m19 12-7 7-7-7"/>'}
+          </svg>${long ? 'Long' : 'Short'}
+        </span>
+      </div>
+      <div class="grid grid-cols-2 gap-3 text-sm">
+        <div class="rounded-xl bg-base/70 border border-edge p-3">
+          <p class="text-[11px] uppercase tracking-widest text-muted">Είσοδος</p>
+          <p class="mt-1 font-semibold tabular-nums">${fmt(p.entry, 4)}</p>
+        </div>
+        <div class="rounded-xl bg-base/70 border border-edge p-3">
+          <p class="text-[11px] uppercase tracking-widest text-muted">Mark</p>
+          <p class="mt-1 font-semibold tabular-nums">${fmt(p.mark, 4)}</p>
+        </div>
+        <div class="rounded-xl bg-base/70 border border-down/30 p-3">
+          <p class="text-[11px] uppercase tracking-widest text-down/80">Stop Loss</p>
+          <p class="mt-1 font-semibold tabular-nums text-down">${fmt(p.sl, 4)}</p>
+        </div>
+        <div class="rounded-xl bg-base/70 border border-up/30 p-3">
+          <p class="text-[11px] uppercase tracking-widest text-up/80">Take Profit</p>
+          <p class="mt-1 font-semibold tabular-nums text-up">${fmt(p.tp, 4)}</p>
+        </div>
+      </div>
+      <div class="rounded-xl bg-base/70 border border-edge p-3 flex items-center justify-between">
+        <p class="text-[11px] uppercase tracking-widest text-muted">Μη υλοπ. PnL</p>
+        <p class="font-display text-xl tabular-nums ${pnlCls}">${p.pnl == null ? '—' : (p.pnl >= 0 ? '+' : '') + fmt(p.pnl)} ${esc(quote)}</p>
+      </div>
+      <p class="text-xs text-muted">Από: <span class="tabular-nums">${esc(p.since || '—')}</span></p>
+    </div>`;
+}
+
+function renderSymbols(symbols) {
+  const tbody = document.getElementById('symbolRows');
+  if (!symbols.length) {
+    tbody.innerHTML = `<tr><td colspan="6" class="py-6 text-center text-muted">Δεν υπάρχουν ακόμη δεδομένα σάρωσης.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = symbols.map(s => {
+    const bull = s.ema_fast > s.ema_slow;
+    const sig = s.signal
+      ? `<span class="inline-flex rounded-full px-2.5 py-0.5 text-xs font-bold uppercase tracking-wider
+           ${s.signal === 'long' ? 'bg-up/15 text-up border border-up/40' : 'bg-down/15 text-down border border-down/40'}">${esc(s.signal)}</span>`
+      : '<span class="text-muted">—</span>';
+    return `
+      <tr class="border-b border-edge/60 last:border-0 hover:bg-base/50 transition-colors duration-200">
+        <td class="py-3 pr-4 font-semibold">${esc(s.symbol)}</td>
+        <td class="py-3 pr-4 tabular-nums">${fmt(s.price, 4)}</td>
+        <td class="py-3 pr-4 tabular-nums text-primary">${fmt(s.ema_fast, 4)} <span class="text-muted text-xs">(${s.ema_fast_period})</span></td>
+        <td class="py-3 pr-4 tabular-nums text-accent">${fmt(s.ema_slow, 4)} <span class="text-muted text-xs">(${s.ema_slow_period})</span></td>
+        <td class="py-3 pr-4">
+          <span class="inline-flex items-center gap-1 text-xs font-semibold ${bull ? 'text-up' : 'text-down'}">
+            <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              ${bull ? '<polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/>'
+                     : '<polyline points="22 17 13.5 8.5 8.5 13.5 2 7"/><polyline points="16 17 22 17 22 11"/>'}
+            </svg>${bull ? 'Ανοδική' : 'Καθοδική'}
+          </span>
+        </td>
+        <td class="py-3">${sig}</td>
+      </tr>`;
+  }).join('');
+}
+
+async function refresh() {
+  let s;
+  try {
+    const r = await fetch('/api/status', { cache: 'no-store' });
+    s = await r.json();
+  } catch {
+    s = { status: 'offline', symbols: [], equity: [], logs: [] };
+  }
+  const st = STATUS_STYLES[s.status] || STATUS_STYLES.offline;
+  const pill = document.getElementById('statusPill');
+  pill.className = `inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold uppercase tracking-wider ${st.cls}`;
+  document.getElementById('statusText').textContent = st.text;
+  document.getElementById('lastUpdate').textContent = s.last_update || '—';
+  document.getElementById('balance').textContent =
+    s.balance == null ? '—' : `${fmt(s.balance)} ${s.quote || ''}`;
+
+  const pnlEl = document.getElementById('pnl');
+  const pnl = s.position && s.position.pnl != null ? s.position.pnl : null;
+  pnlEl.textContent = pnl == null ? '—' : `${pnl >= 0 ? '+' : ''}${fmt(pnl)} ${s.quote || ''}`;
+  pnlEl.className = `mt-2 font-display text-2xl sm:text-3xl tabular-nums ${
+    pnl == null ? 'text-slate-100' : pnl >= 0 ? 'text-up glow-up' : 'text-down glow-down'}`;
+
+  document.getElementById('lastSignal').textContent = s.last_signal
+    ? `${s.last_signal.side} · ${s.last_signal.symbol.split(':')[0]}` : '—';
+
+  renderPosition(s.position, s.quote || 'USDT');
+  renderSymbols(s.symbols || []);
+  renderChart(s.equity || [], s.quote || 'USDT');
+
+  if (!paused) {
+    const feed = document.getElementById('logFeed');
+    feed.textContent = (s.logs || []).join('\n') || (s.error || 'Δεν υπάρχουν logs ακόμη.');
+    feed.scrollTop = feed.scrollHeight;
+  }
+}
+
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>
