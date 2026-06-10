@@ -18,3 +18,9 @@ env/
 .DS_Store
 .idea/
 .vscode/
+bot_state.json
+backtest_results.json
+backtest_*.json
+
+# Generated knowledge graph
+graphify-out/

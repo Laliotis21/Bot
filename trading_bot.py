@@ -35,10 +35,12 @@ Trading Bot — EMA 9/21 Crossover σε Crypto Futures (Binance USDⓂ, CCXT)
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import sys
 import time
+import uuid
 from dataclasses import dataclass
 from typing import Optional
 
@@ -93,6 +95,13 @@ class Config:
         def _bool(name: str, default: str) -> bool:
             return os.getenv(name, default).strip().lower() in ("1", "true", "yes", "y", "on")
 
+        def _num(cast, name: str, default: str):
+            raw = os.getenv(name, default).strip()
+            try:
+                return cast(raw)
+            except ValueError:
+                raise SystemExit(f"Μη έγκυρη τιμή στο .env: {name}='{raw}' (αναμένεται αριθμός).")
+
         symbols = [s.strip() for s in os.getenv("SYMBOLS", "BTC/USDT,ETH/USDT,SOL/USDT").split(",") if s.strip()]
         return cls(
             exchange_id=os.getenv("EXCHANGE", "binance").strip(),
@@ -101,13 +110,13 @@ class Config:
             use_testnet=_bool("USE_TESTNET", "true"),
             symbols=symbols,
             timeframe=os.getenv("TIMEFRAME", "1d").strip(),
-            ema_fast=int(os.getenv("EMA_FAST", "9")),
-            ema_slow=int(os.getenv("EMA_SLOW", "21")),
-            leverage=int(os.getenv("LEVERAGE", "1")),
-            stop_loss_pct=float(os.getenv("STOP_LOSS_PCT", "0.05")),
-            take_profit_pct=float(os.getenv("TAKE_PROFIT_PCT", "0.15")),
-            position_size_pct=float(os.getenv("POSITION_SIZE_PCT", "0.95")),
-            loop_interval=int(os.getenv("LOOP_INTERVAL", "60")),
+            ema_fast=_num(int, "EMA_FAST", "9"),
+            ema_slow=_num(int, "EMA_SLOW", "21"),
+            leverage=_num(int, "LEVERAGE", "1"),
+            stop_loss_pct=_num(float, "STOP_LOSS_PCT", "0.05"),
+            take_profit_pct=_num(float, "TAKE_PROFIT_PCT", "0.15"),
+            position_size_pct=_num(float, "POSITION_SIZE_PCT", "0.95"),
+            loop_interval=_num(int, "LOOP_INTERVAL", "60"),
         )
 
 
@@ -179,7 +188,13 @@ class ExchangeClient:
             "options": {"defaultType": default_type},
         })
         if self.cfg.use_testnet:
-            ex.set_sandbox_mode(True)  # paper trading
+            # Το παλιό Binance futures testnet καταργήθηκε από τη ccxt· τα
+            # Binance exchanges περνούν στο νέο Demo Trading (keys από το
+            # https://demo.binance.com). Τα υπόλοιπα κρατούν το sandbox mode.
+            if self.cfg.exchange_id.startswith("binance") and hasattr(ex, "enable_demo_trading"):
+                ex.enable_demo_trading(True)
+            else:
+                ex.set_sandbox_mode(True)  # paper trading
         return ex
 
     def safe_call(self, fn, *args, **kwargs):
@@ -205,6 +220,50 @@ class ExchangeClient:
                     raise
         raise last_exc  # pragma: no cover (δεν φτάνει ποτέ εδώ)
 
+    def place_order(self, symbol: str, order_type: str, side: str, amount: float,
+                    price: Optional[float] = None, params: Optional[dict] = None):
+        """create_order με idempotency key (clientOrderId).
+
+        ΠΡΟΣΟΧΗ: το create_order ΔΕΝ είναι idempotent — αν γίνει timeout αφού η
+        εντολή εκτελεστεί στο exchange, ένα τυφλό retry θα άνοιγε ΔΙΠΛΗ θέση.
+        Εδώ, πριν από κάθε retry, ελέγχουμε με το clientOrderId αν η εντολή
+        έχει ήδη περάσει· αν ναι, την επιστρέφουμε αντί να ξαναστείλουμε.
+        """
+        params = dict(params or {})
+        cid = params.get("newClientOrderId") or f"bot-{uuid.uuid4().hex[:24]}"
+        params["newClientOrderId"] = cid
+        last_exc: Optional[Exception] = None
+        for attempt in range(len(self.RETRY_DELAYS) + 1):
+            try:
+                return self.exchange.create_order(symbol, order_type, side, amount, price, params)
+            except self.RETRYABLE as exc:
+                last_exc = exc
+                existing = self._find_order_by_client_id(cid, symbol)
+                if existing is not None:
+                    log.warning(
+                        "Η εντολή είχε ήδη εκτελεστεί στο exchange (clientOrderId=%s) — δεν ξαναστέλνεται.", cid
+                    )
+                    return existing
+                if attempt < len(self.RETRY_DELAYS):
+                    delay = self.RETRY_DELAYS[attempt]
+                    log.warning(
+                        "Πρόβλημα σύνδεσης στην αποστολή εντολής (%s). Νέα προσπάθεια σε %ds [%d/%d]...",
+                        type(exc).__name__, delay, attempt + 1, len(self.RETRY_DELAYS),
+                    )
+                    time.sleep(delay)
+                else:
+                    log.error("Η αποστολή εντολής απέτυχε μετά από %d προσπάθειες: %s",
+                              len(self.RETRY_DELAYS), exc)
+                    raise
+        raise last_exc  # pragma: no cover
+
+    def _find_order_by_client_id(self, cid: str, symbol: str) -> Optional[dict]:
+        """Ψάχνει εντολή με βάση το clientOrderId (None αν δεν υπάρχει/δεν βρεθεί)."""
+        try:
+            return self.exchange.fetch_order(None, symbol, {"origClientOrderId": cid})
+        except Exception:
+            return None
+
     def resolve_symbol(self, symbol: str) -> str:
         """Αναλύει το σύμβολο στη μορφή linear perpetual (π.χ. BTC/USDT:USDT)."""
         perp = f"{symbol}:{self.cfg.quote}"
@@ -221,6 +280,8 @@ class ExchangeClient:
 # Ο πυρήνας: state machine (FLAT ↔ IN_POSITION), entries, SL/TP, monitoring
 # ---------------------------------------------------------------------------
 class TradingBot:
+    STATE_FILE = "bot_state.json"
+
     def __init__(self, client: ExchangeClient, cfg: Config):
         self.client = client
         self.cfg = cfg
@@ -229,7 +290,24 @@ class TradingBot:
         self.position: Optional[dict] = None
         # Ανά σύμβολο: timestamp του κλεισμένου κεριού στο οποίο ενεργήσαμε
         # (αποτρέπει επανείσοδο στο ίδιο σήμα μέσα στην ίδια ημέρα).
-        self.last_acted_ts: dict[str, int] = {}
+        # Διατηρείται σε αρχείο ώστε ένα restart να μην ξανα-ανοίξει θέση
+        # στο ίδιο σήμα της ίδιας ημέρας.
+        self.last_acted_ts: dict[str, int] = self._load_state()
+
+    def _load_state(self) -> dict[str, int]:
+        try:
+            with open(self.STATE_FILE, encoding="utf-8") as f:
+                data = json.load(f)
+            return {k: int(v) for k, v in data.get("last_acted_ts", {}).items()}
+        except (OSError, ValueError):
+            return {}
+
+    def _save_state(self) -> None:
+        try:
+            with open(self.STATE_FILE, "w", encoding="utf-8") as f:
+                json.dump({"last_acted_ts": self.last_acted_ts}, f)
+        except OSError as exc:
+            log.warning("Αδυναμία αποθήκευσης κατάστασης στο %s: %s", self.STATE_FILE, exc)
 
     # ---- Βοηθητικά (read) -------------------------------------------------
     def free_balance(self) -> float:
@@ -293,16 +371,30 @@ class TradingBot:
             if self.enter_position(symbol, signal, candle_ts):
                 return  # Μπήκαμε σε θέση -> σταματάμε τη σάρωση των υπολοίπων.
 
+    def _last_price(self, symbol: str) -> Optional[float]:
+        """Τελευταία τιμή με προστασία από ελλιπές ticker (last=None σε ρηχές αγορές)."""
+        ticker = self.client.safe_call(self.client.exchange.fetch_ticker, symbol)
+        last = ticker.get("last") or ticker.get("close") or (ticker.get("info") or {}).get("lastPrice")
+        return float(last) if last else None
+
     def enter_position(self, symbol: str, side: str, candle_ts: int) -> bool:
         """Ανοίγει θέση με market order και τοποθετεί αμέσως SL/TP. True αν επιτύχει."""
         ex = self.client.exchange
 
         # 1) Ρητός ορισμός Isolated margin + leverage (π.χ. 1x) ΠΡΙΝ το άνοιγμα.
-        self._set_isolated_leverage(symbol)
+        #    Αν αποτύχει, ΔΕΝ ανοίγουμε θέση — αλλιώς θα τρέχαμε με ό,τι margin
+        #    mode/leverage είχε μείνει ρυθμισμένο στον λογαριασμό.
+        if not self._set_isolated_leverage(symbol):
+            log.error("Ακύρωση εισόδου στο %s: δεν επιβεβαιώθηκε ISOLATED %dx.",
+                      symbol, self.cfg.leverage)
+            return False
 
         # 2) Μέγεθος θέσης (compounding: ποσοστό του τρέχοντος διαθέσιμου κεφαλαίου).
         balance = self.free_balance()
-        price = float(self.client.safe_call(ex.fetch_ticker, symbol)["last"])
+        price = self._last_price(symbol)
+        if price is None or price <= 0:
+            log.error("Μη διαθέσιμη τιμή για %s — παράλειψη εισόδου.", symbol)
+            return False
         notional = balance * self.cfg.position_size_pct * self.cfg.leverage
         amount = float(ex.amount_to_precision(symbol, notional / price))
         if not self._validate_amount(symbol, amount, price):
@@ -314,7 +406,7 @@ class TradingBot:
             order_side.upper(), amount, symbol, amount * price, self.cfg.quote, price,
         )
         try:
-            self.client.safe_call(ex.create_order, symbol, "market", order_side, amount)
+            order = self.client.place_order(symbol, "market", order_side, amount)
         except ccxt.InsufficientFunds as exc:
             log.error("Ανεπαρκές υπόλοιπο για άνοιγμα θέσης: %s", exc)
             return False
@@ -322,13 +414,29 @@ class TradingBot:
             log.error("Απόρριψη εντολής εισόδου από το exchange: %s", exc)
             return False
 
-        # 3) Επιβεβαίωση θέσης & πραγματική τιμή εισόδου.
+        # Από εδώ και πέρα η εντολή ΕΧΕΙ σταλεί: ό,τι κι αν δείξουν τα επόμενα
+        # API calls, δεν επιτρέπεται νέα είσοδος στο ίδιο κερί.
+        self.last_acted_ts[symbol] = candle_ts
+        self._save_state()
+
+        # 3) Επιβεβαίωση θέσης & πραγματική τιμή εισόδου. Πρωτεύουσα πηγή το
+        #    response της εντολής (τα market orders επιστρέφουν fill αμέσως)·
+        #    το fetch_positions μπορεί να αργεί να ενημερωθεί.
+        order_filled = float(order.get("filled") or 0.0)
+        order_avg = float(order.get("average") or 0.0)
         pos = self._wait_for_position(symbol)
-        if pos is None:
-            log.error("Δεν επιβεβαιώθηκε το άνοιγμα θέσης για %s.", symbol)
+        if pos is not None:
+            entry = float(pos.get("entryPrice") or order_avg or price)
+            filled = abs(float(pos.get("contracts") or order_filled or amount))
+        elif order_filled > 0:
+            log.warning("Η θέση δεν εμφανίστηκε ακόμη στο fetch_positions — "
+                        "συνέχεια με τα στοιχεία εκτέλεσης της εντολής.")
+            entry = order_avg or price
+            filled = order_filled
+        else:
+            log.error("Δεν επιβεβαιώθηκε ούτε θέση ούτε εκτέλεση για %s — "
+                      "δεν θα επιχειρηθεί ξανά στο ίδιο κερί.", symbol)
             return False
-        entry = float(pos.get("entryPrice") or price)
-        filled = abs(float(pos.get("contracts") or amount))
 
         # 4) Υπολογισμός & άμεση τοποθέτηση Stop Loss / Take Profit.
         sl, tp = self._sl_tp_prices(side, entry)
@@ -340,7 +448,6 @@ class TradingBot:
             "symbol": symbol, "side": side, "amount": filled, "entry": entry,
             "sl": sl, "tp": tp, "sl_id": sl_id, "tp_id": tp_id,
         }
-        self.last_acted_ts[symbol] = candle_ts
         log.info(
             "✅ Θέση %s ΑΝΟΙΧΤΗ: %s | είσοδος=%.4f | SL=%.4f (-%.0f%%) | TP=%.4f (+%.0f%%)",
             side.upper(), symbol, entry, sl, self.cfg.stop_loss_pct * 100,
@@ -361,14 +468,19 @@ class TradingBot:
             self._handle_closed_position()
             return
 
-        mark = float(pos.get("markPrice") or
-                     self.client.safe_call(self.client.exchange.fetch_ticker, symbol)["last"])
+        mark = pos.get("markPrice") or self._last_price(symbol)
+        if mark is None:
+            log.warning("Μη διαθέσιμη τιμή mark για %s — παράλειψη κύκλου παρακολούθησης.", symbol)
+            return
+        mark = float(mark)
         pnl = float(pos.get("unrealizedPnl") or 0.0)
         log.info(
             "Θέση %s %s ανοιχτή | mark=%.4f | είσοδος=%.4f | SL=%.4f | TP=%.4f | μη υλοποιημένο PnL=%.2f %s",
             p["side"].upper(), symbol, mark, p["entry"], p["sl"], p["tp"], pnl, self.cfg.quote,
         )
-        # Backup safety-net: αν λείπουν τα bracket orders, κλείσε χειροκίνητα στο όριο.
+        # Αν λείπει σκέλος SL/TP (αποτυχία στην τοποθέτηση), ξαναπροσπάθησε τώρα.
+        self._ensure_brackets(p)
+        # Backup safety-net: αν εξακολουθούν να λείπουν, κλείσε χειροκίνητα στο όριο.
         self._safety_net(symbol, p, mark)
 
     def _handle_closed_position(self) -> None:
@@ -392,22 +504,34 @@ class TradingBot:
                  self.free_balance(), self.cfg.quote)
 
     # ---- Εσωτερικά βοηθητικά ---------------------------------------------
-    def _set_isolated_leverage(self, symbol: str) -> None:
-        """Ορίζει ISOLATED margin & το επιθυμητό leverage (graceful σε 'already set')."""
+    def _set_isolated_leverage(self, symbol: str) -> bool:
+        """Ορίζει ISOLATED margin & το επιθυμητό leverage (graceful σε 'already set').
+
+        Επιστρέφει False σε πραγματική αποτυχία — ο caller ΔΕΝ πρέπει τότε να
+        ανοίξει θέση, αλλιώς θα τρέξει με άγνωστο margin mode/leverage.
+        """
         ex = self.client.exchange
         try:
             self.client.safe_call(ex.set_margin_mode, "isolated", symbol)
             log.info("Margin mode -> ISOLATED για %s.", symbol)
+        except ccxt.MarginModeAlreadySet:
+            log.info("Margin mode ήδη ISOLATED για %s.", symbol)
         except ccxt.ExchangeError as exc:
             if "No need to change" in str(exc) or "-4046" in str(exc):
                 log.info("Margin mode ήδη ISOLATED για %s.", symbol)
             else:
-                log.warning("Αδυναμία ορισμού margin mode για %s: %s", symbol, exc)
+                log.error("Αδυναμία ορισμού margin mode για %s: %s", symbol, exc)
+                return False
         try:
             self.client.safe_call(ex.set_leverage, self.cfg.leverage, symbol)
             log.info("Leverage -> %dx για %s.", self.cfg.leverage, symbol)
         except ccxt.ExchangeError as exc:
-            log.warning("Αδυναμία ορισμού leverage για %s: %s", symbol, exc)
+            if "not modified" in str(exc).lower():
+                log.info("Leverage ήδη %dx για %s.", self.cfg.leverage, symbol)
+            else:
+                log.error("Αδυναμία ορισμού leverage για %s: %s", symbol, exc)
+                return False
+        return True
 
     def _validate_amount(self, symbol: str, amount: float, price: float) -> bool:
         """Ελέγχει το μέγεθος θέσης έναντι των ελάχιστων ορίων της αγοράς."""
@@ -432,31 +556,45 @@ class TradingBot:
             return entry * (1 - self.cfg.stop_loss_pct), entry * (1 + self.cfg.take_profit_pct)
         return entry * (1 + self.cfg.stop_loss_pct), entry * (1 - self.cfg.take_profit_pct)
 
+    def _place_single_bracket(self, symbol: str, order_type: str, exit_side: str,
+                              amount: float, stop_price: float, name: str) -> Optional[str]:
+        """Τοποθετεί ένα reduce-only σκέλος SL/TP. Επιστρέφει order id ή None."""
+        try:
+            order = self.client.place_order(
+                symbol, order_type, exit_side, amount, None,
+                {"stopPrice": stop_price, "reduceOnly": True},
+            )
+            oid = order.get("id")
+            log.info("   Τοποθετήθηκε %s @ %.4f (id=%s).", name, stop_price, oid)
+            return oid
+        except ccxt.ExchangeError as exc:
+            log.error("   Αποτυχία τοποθέτησης %s: %s", name, exc)
+            return None
+
     def _place_brackets(self, symbol: str, side: str, amount: float,
                         sl: float, tp: float) -> tuple[Optional[str], Optional[str]]:
         """Τοποθετεί reduce-only Stop Loss (STOP_MARKET) & Take Profit (TAKE_PROFIT_MARKET)."""
-        ex = self.client.exchange
         exit_side = "sell" if side == "long" else "buy"
-        sl_id = tp_id = None
-        try:
-            order = self.client.safe_call(
-                ex.create_order, symbol, "STOP_MARKET", exit_side, amount, None,
-                {"stopPrice": sl, "reduceOnly": True},
-            )
-            sl_id = order.get("id")
-            log.info("   Τοποθετήθηκε STOP LOSS @ %.4f (id=%s).", sl, sl_id)
-        except ccxt.ExchangeError as exc:
-            log.error("   Αποτυχία τοποθέτησης Stop Loss: %s", exc)
-        try:
-            order = self.client.safe_call(
-                ex.create_order, symbol, "TAKE_PROFIT_MARKET", exit_side, amount, None,
-                {"stopPrice": tp, "reduceOnly": True},
-            )
-            tp_id = order.get("id")
-            log.info("   Τοποθετήθηκε TAKE PROFIT @ %.4f (id=%s).", tp, tp_id)
-        except ccxt.ExchangeError as exc:
-            log.error("   Αποτυχία τοποθέτησης Take Profit: %s", exc)
+        sl_id = self._place_single_bracket(symbol, "STOP_MARKET", exit_side, amount, sl, "STOP LOSS")
+        tp_id = self._place_single_bracket(symbol, "TAKE_PROFIT_MARKET", exit_side, amount, tp, "TAKE PROFIT")
         return sl_id, tp_id
+
+    def _ensure_brackets(self, p: dict) -> None:
+        """Ξαναπροσπαθεί να τοποθετήσει όποιο σκέλος SL/TP λείπει (κάθε loop).
+
+        Χωρίς αυτό, μια αποτυχία στο αρχικό _place_brackets θα άφηνε τη θέση
+        μόνιμα χωρίς προστασία στο exchange, με μόνη άμυνα το safety net.
+        """
+        if p.get("sl_id") and p.get("tp_id"):
+            return
+        exit_side = "sell" if p["side"] == "long" else "buy"
+        log.warning("Λείπει σκέλος SL/TP για %s — επαναπροσπάθεια τοποθέτησης.", p["symbol"])
+        if not p.get("sl_id"):
+            p["sl_id"] = self._place_single_bracket(
+                p["symbol"], "STOP_MARKET", exit_side, p["amount"], p["sl"], "STOP LOSS")
+        if not p.get("tp_id"):
+            p["tp_id"] = self._place_single_bracket(
+                p["symbol"], "TAKE_PROFIT_MARKET", exit_side, p["amount"], p["tp"], "TAKE PROFIT")
 
     def _wait_for_position(self, symbol: str, timeout: int = 10) -> Optional[dict]:
         """Περιμένει (μέχρι timeout) να εμφανιστεί η θέση μετά το market order."""
@@ -523,9 +661,8 @@ class TradingBot:
         log.warning("Backup safety-net: παραβιάστηκε όριο χωρίς ενεργό bracket order — χειροκίνητο κλείσιμο %s.", symbol)
         exit_side = "sell" if p["side"] == "long" else "buy"
         try:
-            self.client.safe_call(
-                self.client.exchange.create_order, symbol, "market", exit_side,
-                p["amount"], None, {"reduceOnly": True},
+            self.client.place_order(
+                symbol, "market", exit_side, p["amount"], None, {"reduceOnly": True},
             )
         except ccxt.ExchangeError as exc:
             log.error("Αποτυχία χειροκίνητου κλεισίματος: %s", exc)
@@ -540,6 +677,14 @@ class TradingBot:
                 continue
             side = pos.get("side") or "long"
             entry = float(pos.get("entryPrice") or 0.0)
+            if entry <= 0:
+                # Χωρίς entryPrice τα SL/TP θα έβγαιναν 0 (άκυρα orders, ψευδείς
+                # έξοδοι). Fallback σε markPrice ή τελευταία τιμή.
+                entry = float(pos.get("markPrice") or 0.0) or (self._last_price(symbol) or 0.0)
+            if entry <= 0:
+                log.error("Αδύνατος προσδιορισμός τιμής εισόδου για τη θέση %s — "
+                          "ΔΕΝ τοποθετούνται SL/TP. Απαιτείται χειροκίνητος έλεγχος!", symbol)
+                continue
             amount = abs(float(pos.get("contracts") or 0.0))
             sl, tp = self._sl_tp_prices(side, entry)
             sl = float(self.client.exchange.price_to_precision(symbol, sl))
