@@ -1,23 +1,25 @@
 # Deployment — δωρεάν 24/7 hosting
 
 Τα bots είναι long-running processes — θέλουν VM (όχι serverless όπως Vercel/Netlify).
-Δύο **πραγματικά δωρεάν για πάντα** επιλογές:
 
-## Επιλογή Α — Oracle Cloud «Always Free» (προτείνεται)
+> ⚠️ **ΚΡΙΣΙΜΟ — geo-restriction**: η Binance επιστρέφει HTTP 451 σε IP από
+> ΗΠΑ. Αυτό αποκλείει: GitHub Actions runners (US), Google Cloud free tier
+> (μόνο US regions), και κάθε US datacenter. Επαληθευμένο εμπειρικά
+> (run #27342564795). Διάλεξε ΕΥΡΩΠΑΪΚΟ region.
+
+## Η δωρεάν επιλογή που δουλεύει: Oracle Cloud «Always Free» σε EU region
 
 Δίνει δωρεάν για πάντα ARM VM έως 4 cores / 24GB RAM — υπεραρκετό.
 
 1. Λογαριασμός στο https://signup.oraclecloud.com (ζητά κάρτα για ταυτοποίηση,
    ΔΕΝ χρεώνει — μείνε σε «Always Free» πόρους).
+   **Home region: διάλεξε Frankfurt, Amsterdam, Paris, Milan ή Stockholm**
+   (δεν αλλάζει μετά — ΟΧΙ Αμερική, λόγω Binance 451).
 2. Compute → Create Instance → Image: **Ubuntu 22.04**, Shape: **VM.Standard.A1.Flex**
    (Always Free eligible). Κατέβασε το SSH key.
 3. Σύνδεση: `ssh -i key.pem ubuntu@<server-ip>`
 
-## Επιλογή Β — Google Cloud «Free Tier»
-
-e2-micro VM δωρεάν για πάντα (us-west1/us-central1/us-east1, 1 vCPU/1GB —
-αρκεί, τα bots είναι ελαφριά). console.cloud.google.com → Compute Engine →
-Create Instance → e2-micro + Ubuntu 22.04.
+(Εναλλακτικά επί πληρωμή: Hetzner Γερμανία ~4,5€/μήνα — ίδια εγκατάσταση.)
 
 ## Εγκατάσταση (ίδια και στις δύο, ~5 λεπτά)
 
