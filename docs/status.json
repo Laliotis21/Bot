@@ -1,0 +1,80 @@
+{
+ "status": "running",
+ "last_update": "2026-06-11 10:10:21",
+ "source": "github-actions",
+ "balance": 5000.04,
+ "quote": "USDT",
+ "equity": [
+  {
+   "t": "2026-06-11 10:10:21",
+   "v": 5000.04
+  }
+ ],
+ "symbols": [
+  {
+   "symbol": "SOL/USDT:USDT",
+   "price": 63.17,
+   "ema_fast_period": 9,
+   "ema_fast": 67.858735,
+   "ema_slow_period": 21,
+   "ema_slow": 74.045941,
+   "signal": null,
+   "time": "2026-06-11 10:10:21"
+  }
+ ],
+ "position": null,
+ "last_signal": null,
+ "ema_status": "running",
+ "tsmom": {
+  "status": "running",
+  "last_update": "2026-06-11 10:10:21",
+  "symbols": [
+   {
+    "symbol": "BTC/USDT:USDT",
+    "lookback": 12,
+    "momentum": -29.5,
+    "signal": "FLAT",
+    "position": "καμία",
+    "time": "2026-06-11 10:10:21"
+   },
+   {
+    "symbol": "ETH/USDT:USDT",
+    "lookback": 12,
+    "momentum": -20.6,
+    "signal": "FLAT",
+    "position": "καμία",
+    "time": "2026-06-11 10:10:21"
+   }
+  ]
+ },
+ "funding": {
+  "status": "running",
+  "last_update": "2026-06-11 10:10:21",
+  "symbols": [
+   {
+    "symbol": "BTC/USDT:USDT",
+    "apr": 14.25,
+    "active": true,
+    "notional": 750.006411825,
+    "accrued": 0.0,
+    "mode": "PAPER",
+    "time": "2026-06-11 10:10:21"
+   },
+   {
+    "symbol": "ETH/USDT:USDT",
+    "apr": -3.08,
+    "active": false,
+    "notional": null,
+    "accrued": null,
+    "mode": null,
+    "time": "2026-06-11 10:10:21"
+   }
+  ],
+  "total_income": 0.0,
+  "positions_count": 1
+ },
+ "events": [],
+ "logs": [
+  "2026-06-11 10:10:21 [INFO] Snapshot από GitHub Actions — αναλυτικά logs: https://github.com/Laliotis21/Bot/actions"
+ ]
+}

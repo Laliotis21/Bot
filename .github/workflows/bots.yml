@@ -59,11 +59,18 @@ jobs:
             echo "Παράλειψη TSMOM (τρέχει στις 00/06/12/18 UTC)."
           fi
 
+      - name: Snapshot για το Pages dashboard
+        run: |
+          python dashboard/snapshot.py
+          mkdir -p docs
+          cp dashboard/index.html docs/index.html
+
       - name: Αποθήκευση state πίσω στο repo
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -f bot_state.json tsmom_state.json funding_state.json 2>/dev/null || true
+          git add docs/ 2>/dev/null || true
           if git diff --cached --quiet; then
             echo "Καμία αλλαγή state."
           else
