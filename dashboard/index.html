@@ -80,7 +80,7 @@ tailwind.config = {
 <main class="max-w-7xl mx-auto px-4 lg:px-8 pt-8 pb-16 space-y-6">
 
   <!-- Stat cards -->
-  <section aria-label="Σύνοψη" class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+  <section aria-label="Σύνοψη" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
     <div class="rounded-2xl border border-edge bg-panel p-5">
       <div class="flex items-center gap-2 text-muted text-xs uppercase tracking-widest">
         <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2"/><path d="M6 12h.01M18 12h.01"/></svg>
@@ -102,6 +102,13 @@ tailwind.config = {
       </div>
       <p id="lastSignal" class="mt-2 font-display text-2xl sm:text-3xl text-accent tabular-nums">—</p>
     </div>
+    <div class="rounded-2xl border border-edge bg-panel p-5">
+      <div class="flex items-center gap-2 text-muted text-xs uppercase tracking-widest">
+        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M14.5 9.5c-.5-.8-1.4-1.3-2.5-1.3-1.7 0-3 1-3 2.4s1.3 2 3 2.4c1.7.4 3 1 3 2.4s-1.3 2.4-3 2.4c-1.1 0-2-.5-2.5-1.3M12 6v2M12 16v2"/></svg>
+        Funding εισόδημα (σωρ.)
+      </div>
+      <p id="fundIncome" class="mt-2 font-display text-2xl sm:text-3xl text-up tabular-nums">—</p>
+    </div>
   </section>
 
   <!-- Position + Equity -->
@@ -114,6 +121,30 @@ tailwind.config = {
       <h2 class="font-display text-sm tracking-widest text-muted uppercase">Κεφάλαιο (equity)</h2>
       <div class="mt-4 h-64"><canvas id="equityChart" role="img" aria-label="Διάγραμμα εξέλιξης κεφαλαίου"></canvas></div>
     </div>
+  </section>
+
+  <!-- Strategies: TSMOM + Funding -->
+  <section class="grid grid-cols-1 lg:grid-cols-2 gap-4" aria-label="Στρατηγικές">
+    <div class="rounded-2xl border border-edge bg-panel p-5">
+      <div class="flex items-center justify-between">
+        <h2 class="font-display text-sm tracking-widest text-muted uppercase">TSMOM — 12μηνο Momentum</h2>
+        <span id="tsmomStatus" class="text-xs text-muted">—</span>
+      </div>
+      <div id="tsmomCard" class="mt-4 space-y-3"></div>
+    </div>
+    <div class="rounded-2xl border border-edge bg-panel p-5">
+      <div class="flex items-center justify-between">
+        <h2 class="font-display text-sm tracking-widest text-muted uppercase">Funding Harvester</h2>
+        <span id="fundStatus" class="text-xs text-muted">—</span>
+      </div>
+      <div id="fundingCard" class="mt-4 space-y-3"></div>
+    </div>
+  </section>
+
+  <!-- Trades & Events feed -->
+  <section class="rounded-2xl border border-edge bg-panel p-5" aria-label="Trades και συμβάντα">
+    <h2 class="font-display text-sm tracking-widest text-muted uppercase">Trades &amp; Συμβάντα (όλες οι στρατηγικές)</h2>
+    <ul id="eventsFeed" class="mt-4 space-y-2"></ul>
   </section>
 
   <!-- Signals table -->
@@ -288,6 +319,79 @@ function renderSymbols(symbols) {
   }).join('');
 }
 
+const STRAT_BADGE = {
+  EMA:   'bg-primary/15 text-primary border-primary/40',
+  TSMOM: 'bg-accent/15 text-accent border-accent/40',
+  FUND:  'bg-up/15 text-up border-up/40',
+};
+
+function renderTsmom(t) {
+  const el = document.getElementById('tsmomCard');
+  document.getElementById('tsmomStatus').textContent =
+    t && t.status === 'running' ? 'σε λειτουργία' : (t && t.status === 'stale' ? 'χωρίς πρόσφατα logs' : 'εκτός');
+  if (!t || !t.symbols || !t.symbols.length) {
+    el.innerHTML = '<p class="text-muted text-sm">Δεν υπάρχουν δεδομένα ακόμη.</p>';
+    return;
+  }
+  el.innerHTML = t.symbols.map(s => {
+    const long = s.signal === 'LONG';
+    const inPos = s.position && s.position !== 'καμία';
+    return `
+      <div class="rounded-xl bg-base/70 border border-edge p-3 flex items-center justify-between gap-3">
+        <div>
+          <p class="font-semibold">${esc(s.symbol)}</p>
+          <p class="text-xs text-muted">${s.lookback}μηνο momentum:
+            <span class="${s.momentum >= 0 ? 'text-up' : 'text-down'} font-semibold tabular-nums">${s.momentum >= 0 ? '+' : ''}${fmt(s.momentum, 1)}%</span>
+          </p>
+        </div>
+        <div class="text-right space-y-1">
+          <span class="inline-flex rounded-full px-2.5 py-0.5 text-xs font-bold uppercase tracking-wider border
+            ${long ? 'bg-up/15 text-up border-up/40' : 'bg-base text-muted border-edge'}">${esc(s.signal)}</span>
+          <p class="text-[11px] text-muted">θέση: ${inPos ? 'LONG' : 'καμία'}</p>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+function renderFunding(f, quote) {
+  const el = document.getElementById('fundingCard');
+  document.getElementById('fundStatus').textContent =
+    f && f.status === 'running' ? 'σε λειτουργία' : (f && f.status === 'stale' ? 'χωρίς πρόσφατα logs' : 'εκτός');
+  if (!f || !f.symbols || !f.symbols.length) {
+    el.innerHTML = '<p class="text-muted text-sm">Δεν υπάρχουν δεδομένα ακόμη.</p>';
+    return;
+  }
+  el.innerHTML = f.symbols.map(s => `
+    <div class="rounded-xl bg-base/70 border ${s.active ? 'border-up/40' : 'border-edge'} p-3 flex items-center justify-between gap-3">
+      <div>
+        <p class="font-semibold">${esc(s.symbol)}</p>
+        <p class="text-xs text-muted">30d funding:
+          <span class="${s.apr >= 0 ? 'text-up' : 'text-down'} font-semibold tabular-nums">${s.apr >= 0 ? '+' : ''}${fmt(s.apr, 2)}% APR</span>
+        </p>
+      </div>
+      <div class="text-right space-y-1">
+        <span class="inline-flex rounded-full px-2.5 py-0.5 text-xs font-bold uppercase tracking-wider border
+          ${s.active ? 'bg-up/15 text-up border-up/40' : 'bg-base text-muted border-edge'}">
+          ${s.active ? (s.mode || 'ΕΝΕΡΓΗ') : 'εκτός'}</span>
+        ${s.active ? `<p class="text-[11px] text-muted tabular-nums">notional ${fmt(s.notional, 0)} | έσοδα ${fmt(s.accrued, 4)}</p>` : ''}
+      </div>
+    </div>`).join('');
+}
+
+function renderEvents(events) {
+  const el = document.getElementById('eventsFeed');
+  if (!events || !events.length) {
+    el.innerHTML = '<li class="text-muted text-sm">Κανένα trade/συμβάν ακόμη — τα bots περιμένουν σήμα.</li>';
+    return;
+  }
+  el.innerHTML = events.map(e => `
+    <li class="flex items-center gap-3 rounded-xl bg-base/60 border border-edge px-3 py-2">
+      <span class="inline-flex shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-bold tracking-wider ${STRAT_BADGE[e.strategy] || 'bg-base text-muted border-edge'}">${esc(e.strategy)}</span>
+      <span class="text-sm flex-1">${esc(e.text)}</span>
+      <span class="text-xs text-muted tabular-nums shrink-0">${esc(e.time)}</span>
+    </li>`).join('');
+}
+
 async function refresh() {
   let s;
   try {
@@ -313,9 +417,16 @@ async function refresh() {
   document.getElementById('lastSignal').textContent = s.last_signal
     ? `${s.last_signal.side} · ${s.last_signal.symbol.split(':')[0]}` : '—';
 
+  const fi = s.funding && s.funding.total_income;
+  document.getElementById('fundIncome').textContent =
+    fi == null ? '—' : `${fi >= 0 ? '+' : ''}${fmt(fi, 4)} ${s.quote || 'USDT'}`;
+
   renderPosition(s.position, s.quote || 'USDT');
   renderSymbols(s.symbols || []);
   renderChart(s.equity || [], s.quote || 'USDT');
+  renderTsmom(s.tsmom);
+  renderFunding(s.funding, s.quote || 'USDT');
+  renderEvents(s.events);
 
   if (!paused) {
     const feed = document.getElementById('logFeed');

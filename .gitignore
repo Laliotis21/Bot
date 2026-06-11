@@ -27,3 +27,5 @@ graphify-out/
 tsmom_state.json
 funding_state.json
 funding_analysis.json
+.pids/
+*.out
