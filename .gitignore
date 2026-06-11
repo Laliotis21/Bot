@@ -24,3 +24,6 @@ backtest_*.json
 
 # Generated knowledge graph
 graphify-out/
+tsmom_state.json
+funding_state.json
+funding_analysis.json
