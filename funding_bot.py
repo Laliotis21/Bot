@@ -234,6 +234,7 @@ class FundingBot:
 def main() -> None:
     ap = argparse.ArgumentParser(description="Funding harvester (delta-neutral, regime filter).")
     ap.add_argument("--check", action="store_true", help="read-only έλεγχος APRs & αποφάσεων")
+    ap.add_argument("--once", action="store_true", help="ένα πέρασμα και έξοδος (για cron)")
     args = ap.parse_args()
 
     setup_logging("funding.log")
@@ -245,6 +246,8 @@ def main() -> None:
 
     if args.check:
         bot.step(dry_run=True)
+    elif args.once:
+        bot.step()
     else:
         bot.run()
 

@@ -747,6 +747,19 @@ class TradingBot:
                 log.exception("Μη αναμενόμενο σφάλμα στον κύριο βρόχο: %s", exc)
             time.sleep(self.cfg.loop_interval)
 
+    def run_once(self) -> None:
+        """Ένα πέρασμα (για scheduled εκτέλεση, π.χ. GitHub Actions cron).
+
+        Stateless-friendly: το reconcile υιοθετεί τυχόν ανοιχτή θέση και
+        επανατοποθετεί SL/TP που λείπουν· το bot_state.json αποτρέπει
+        επανείσοδο στο ίδιο κερί μεταξύ εκτελέσεων.
+        """
+        self.reconcile_on_startup()
+        if self.position is None:
+            self.scan_and_maybe_enter()
+        else:
+            self.manage_open_position()
+
     # ---- Διαγνωστικός έλεγχος (read-only) --------------------------------
     def run_check(self) -> None:
         log.info("=== Διαγνωστικός έλεγχος (read-only — δεν τοποθετούνται orders) ===")
@@ -843,6 +856,8 @@ def main() -> None:
                         help="Διαγνωστικός έλεγχος (read-only, χωρίς orders).")
     parser.add_argument("--selftest", action="store_true",
                         help="Offline έλεγχος της λογικής σήματος (χωρίς API).")
+    parser.add_argument("--once", action="store_true",
+                        help="Ένα πέρασμα και έξοδος (για scheduled/cron εκτέλεση).")
     args = parser.parse_args()
 
     setup_logging()
@@ -861,6 +876,10 @@ def main() -> None:
 
     if args.check:
         bot.run_check()
+        return
+
+    if args.once:
+        bot.run_once()
         return
 
     try:

@@ -1,0 +1,73 @@
+name: Trading bots (paper)
+
+# Δωρεάν 24/7 εκτέλεση μέσω scheduled Actions (public repo = unlimited minutes).
+# - EMA (1d timeframe) + Funding: κάθε ώρα — υπεραρκετό, τα SL/TP ζουν στο exchange.
+# - TSMOM: στο πέρασμα των 00/06/12/18 UTC (μηνιαίο σήμα — δεν θέλει συχνότερα).
+# - Το state (bot_state/tsmom_state/funding_state.json) γίνεται commit πίσω στο
+#   repo, ώστε κάθε εκτέλεση να συνεχίζει από όπου έμεινε η προηγούμενη.
+#
+# ΠΡΟΣΟΧΗ: όσο τρέχει αυτό το workflow, ΜΗΝ τρέχεις τα bots και τοπικά με τα
+# ίδια keys — θα γίνονταν διπλές εντολές στον ίδιο λογαριασμό.
+
+on:
+  schedule:
+    - cron: "7 * * * *"        # κάθε ώρα στο :07 (το GitHub cron έχει delays — ΟΚ για 1d)
+  workflow_dispatch: {}         # χειροκίνητο τρέξιμο για δοκιμή
+
+concurrency:
+  group: trading-bots
+  cancel-in-progress: false     # ποτέ δύο εκτελέσεις ταυτόχρονα
+
+permissions:
+  contents: write               # για το commit του state
+
+jobs:
+  run-bots:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      API_KEY: ${{ secrets.API_KEY }}
+      API_SECRET: ${{ secrets.API_SECRET }}
+      USE_TESTNET: "true"
+      SYMBOLS: "SOL/USDT"                 # EMA bot — τα BTC/ETH ανήκουν στο TSMOM
+      TSMOM_SYMBOLS: "BTC/USDT,ETH/USDT"
+      FUNDING_SYMBOLS: "BTC/USDT,ETH/USDT"
+      FUNDING_EXECUTE: "false"            # paper accounting (ακριβές για funding)
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Εγκατάσταση dependencies
+        run: pip install -r requirements.txt
+
+      - name: EMA bot — ένα πέρασμα
+        run: python trading_bot.py --once
+
+      - name: Funding harvester — ένα πέρασμα
+        run: python funding_bot.py --once
+
+      - name: TSMOM — ένα πέρασμα (κάθε 6 ώρες)
+        run: |
+          H=$(date -u +%H)
+          if [ $((10#$H % 6)) -eq 0 ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            python tsmom_bot.py --once
+          else
+            echo "Παράλειψη TSMOM (τρέχει στις 00/06/12/18 UTC)."
+          fi
+
+      - name: Αποθήκευση state πίσω στο repo
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -f bot_state.json tsmom_state.json funding_state.json 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "Καμία αλλαγή state."
+          else
+            git pull --rebase --autostash origin "${GITHUB_REF_NAME}"
+            git commit -m "chore: bot state $(date -u '+%Y-%m-%d %H:%M') [skip ci]"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
