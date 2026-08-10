@@ -29,3 +29,18 @@ funding_state.json
 funding_analysis.json
 .pids/
 *.out
+
+# Spot framework
+data/*.db
+data/*.db-journal
+reports/*.png
+reports/*.html
+reports/*.json
+!reports/.gitkeep
+!data/.gitkeep
+!logs/.gitkeep
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
