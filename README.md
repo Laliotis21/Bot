@@ -103,3 +103,21 @@ trading_bot.py    # Όλη η λογική (config, indicators, exchange client,
 requirements.txt  # ccxt, pandas, python-dotenv
 .gitignore        # αποκλείει το .env και logs
 ```
+
+---
+
+## Spot Framework (`app/`) — modular production system
+
+A separate **Binance Spot** algorithmic trading framework lives under [`app/`](app/).
+It does **not** replace the futures bots above.
+
+See the full documentation: [`docs/SPOT_FRAMEWORK.md`](docs/SPOT_FRAMEWORK.md)
+
+```bash
+pip install -e ".[dev]"
+python -m app.cli backtest
+python -m app.cli monte-carlo --seed 42
+python -m pytest
+```
+
+Default mode is **paper trading**. Live trading requires explicit confirmation.

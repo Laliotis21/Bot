@@ -1,0 +1,54 @@
+"""Shared enumerations."""
+
+from __future__ import annotations
+
+from enum import Enum
+
+
+class Side(str, Enum):
+    BUY = "BUY"
+    SELL = "SELL"
+
+
+class SignalType(str, Enum):
+    BUY = "BUY"
+    SELL = "SELL"
+    NONE = "NONE"
+
+
+class OrderType(str, Enum):
+    MARKET = "MARKET"
+    LIMIT = "LIMIT"
+    STOP_LOSS = "STOP_LOSS"
+    TAKE_PROFIT = "TAKE_PROFIT"
+
+
+class OrderStatus(str, Enum):
+    PENDING = "PENDING"
+    OPEN = "OPEN"
+    PARTIALLY_FILLED = "PARTIALLY_FILLED"
+    FILLED = "FILLED"
+    CANCELED = "CANCELED"
+    REJECTED = "REJECTED"
+    EXPIRED = "EXPIRED"
+
+
+class PositionStatus(str, Enum):
+    OPEN = "OPEN"
+    PARTIALLY_CLOSED = "PARTIALLY_CLOSED"
+    CLOSED = "CLOSED"
+
+
+class RiskEventType(str, Enum):
+    DRAWDOWN_CIRCUIT_BREAKER = "DRAWDOWN_CIRCUIT_BREAKER"
+    DAILY_LOSS_GUARD = "DAILY_LOSS_GUARD"
+    MAX_CONSECUTIVE_LOSSES = "MAX_CONSECUTIVE_LOSSES"
+    MAX_TRADES_PER_DAY = "MAX_TRADES_PER_DAY"
+    MAX_EXPOSURE = "MAX_EXPOSURE"
+    DUPLICATE_POSITION = "DUPLICATE_POSITION"
+    DUPLICATE_ORDER = "DUPLICATE_ORDER"
+    KILL_SWITCH = "KILL_SWITCH"
+    API_ERROR_CIRCUIT = "API_ERROR_CIRCUIT"
+    STALE_MARKET_DATA = "STALE_MARKET_DATA"
+    INSUFFICIENT_BALANCE = "INSUFFICIENT_BALANCE"
+    FILTER_VIOLATION = "FILTER_VIOLATION"
