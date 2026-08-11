@@ -87,7 +87,11 @@ class PaperTradingEngine:
         )
 
     def on_market_data(self, market_data: pd.DataFrame) -> dict[str, Any]:
-        """Process one closed-bar update through the full pipeline."""
+        """Process one closed-bar update through the full pipeline.
+
+        Spot paper mode is long-only: BUY opens, SELL closes an existing long.
+        Short opens are skipped so the FIFO ledger never sells without lots.
+        """
         if market_data.empty:
             return {"action": "noop"}
         self._last_price = float(market_data["close"].iloc[-1])
@@ -98,46 +102,21 @@ class PaperTradingEngine:
         if self.store:
             self.store.insert_json("strategy_signals", signal.model_dump(mode="json"))
 
-        decision = self.risk.evaluate_entry(
-            signal,
-            self.filters,
-            available_balance=self.ledger.cash_balance,
-        )
-        if not decision.allowed or not decision.size or not decision.size.accepted:
-            return {"action": "risk_blocked", "reason": decision.reason}
-
-        side = Side.BUY if signal.signal_type == SignalType.BUY else Side.SELL
-        # Spot paper: only open longs for BUY; SELL closes if open else skip shorts optionally
         open_for_symbol = self.positions.get_by_symbol(signal.symbol)
-        if side == Side.SELL and not open_for_symbol:
-            # Allow simulated short for parity with backtest
-            pass
 
-        order = self.execution.submit(
-            symbol=signal.symbol,
-            side=side,
-            order_type=OrderType.MARKET,
-            quantity=decision.size.quantity,
-            price=signal.entry_price,
-        )
-
-        if side == Side.BUY:
-            pos = self.positions.open_position(
-                symbol=signal.symbol,
-                side=side,
-                quantity=order.filled_quantity,
-                entry_price=order.average_price or signal.entry_price or 0.0,
-                stop_loss=signal.stop_loss,
-                take_profit=signal.take_profit,
-                fees=order.fee_amount,
-            )
-            self.risk.register_open_position(signal.symbol, decision.size.notional)
-            self.alerts.send(f"Trade opened (paper): {pos.position_id} {signal.symbol}")
-            return {"action": "opened", "position_id": pos.position_id, "order_id": order.order_id}
-
-        # Sell / close path
-        if open_for_symbol:
+        # Close existing long on SELL signal
+        if signal.signal_type == SignalType.SELL:
+            if not open_for_symbol:
+                return {"action": "skipped_short", "reason": "spot_long_only"}
             pos = open_for_symbol[0]
+            order = self.execution.submit(
+                symbol=signal.symbol,
+                side=Side.SELL,
+                order_type=OrderType.MARKET,
+                quantity=pos.quantity,
+                price=signal.entry_price or self._last_price,
+                position_id=pos.position_id,
+            )
             fill = Fill(
                 order_id=order.order_id,
                 symbol=order.symbol,
@@ -146,22 +125,45 @@ class PaperTradingEngine:
                 price=order.average_price or 0.0,
                 fee_amount=order.fee_amount,
             )
+            # Ledger already recorded the SELL in ExecutionEngine.apply_fill
             self.positions.apply_fill(pos.position_id, fill)
-            self.risk.unregister_position(signal.symbol, decision.size.notional)
+            notional = pos.entry_price * fill.quantity
+            self.risk.unregister_position(signal.symbol, notional)
             self.risk.record_realized_trade(pos.realized_pnl)
             self.alerts.send(f"Trade closed (paper): {pos.position_id}")
-            return {"action": "closed", "position_id": pos.position_id}
+            return {"action": "closed", "position_id": pos.position_id, "order_id": order.order_id}
 
+        # BUY — open long only when flat
+        if open_for_symbol:
+            return {"action": "already_open"}
+
+        decision = self.risk.evaluate_entry(
+            signal,
+            self.filters,
+            available_balance=self.ledger.cash_balance,
+        )
+        if not decision.allowed or not decision.size or not decision.size.accepted:
+            return {"action": "risk_blocked", "reason": decision.reason}
+
+        order = self.execution.submit(
+            symbol=signal.symbol,
+            side=Side.BUY,
+            order_type=OrderType.MARKET,
+            quantity=decision.size.quantity,
+            price=signal.entry_price,
+        )
         pos = self.positions.open_position(
             symbol=signal.symbol,
-            side=Side.SELL,
+            side=Side.BUY,
             quantity=order.filled_quantity,
-            entry_price=order.average_price or 0.0,
+            entry_price=order.average_price or signal.entry_price or 0.0,
             stop_loss=signal.stop_loss,
             take_profit=signal.take_profit,
             fees=order.fee_amount,
         )
-        return {"action": "opened_short", "position_id": pos.position_id}
+        self.risk.register_open_position(signal.symbol, decision.size.notional)
+        self.alerts.send(f"Trade opened (paper): {pos.position_id} {signal.symbol}")
+        return {"action": "opened", "position_id": pos.position_id, "order_id": order.order_id}
 
     def shutdown(self) -> None:
         self.alerts.send("Bot stopped (PAPER TRADING)")
